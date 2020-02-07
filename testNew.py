@@ -23,6 +23,7 @@ def test(
         save_json=False
 ):
     device = torch_utils.select_device()
+    print(weights + ' conf_thres: ' + str(conf_thres) + ' nms_thres: ' + str(nms_thres))
 
     # Configure run
     data_cfg_dict = parse_data_cfg(data_cfg)
@@ -57,29 +58,13 @@ def test(
     tp_, conf_, pred_cls_, target_cls_ = [], [], [], []
 
     for batch_i, (imgs, targets, paths, shapes) in enumerate(dataloader):
-        print(batch_i)
         t = time.time()
-        print(paths)
+
         output = model(imgs.to(device))
         output = non_max_suppression(output, conf_thres=conf_thres, nms_thres=nms_thres)
-        print("---TARGET:---")
-        print(targets)
-        print("---OUTPUT:---")
-        print(output)
-        print(output[0])
-        print(len(output))
 
-        print(" Prediction :")
-        print(output)
         # Compute average precision for each sample
-        for si, (labels, detections) in enumerate(zip(targets, output)):
-            print("____ SI: ___")
-            print(si)
-            print("____ LABELS: ___")
-            print(labels)
-            print("____ DETECTIONS: ___")
-            print(detections)
-            
+        for si, (labels, detections) in enumerate(zip(targets, output)):            
             seen += 1
 
             if detections is None:
@@ -90,16 +75,8 @@ def test(
 
             # Get detections sorted by decreasing confidence scores
             detections = detections.cpu().numpy()
-            print("**** detections: ****")
-            print(detections)
             detections = detections[np.argsort(-detections[:, 4])]
-            print("**** detections: ****")
-            print(detections)
-            print("**** detections: ****")
             
-            for i in detections:
-                print(i[4])
-
             # If no labels add number of detections as incorrect
             correct = []
             if labels.size(0) == 0:
@@ -114,21 +91,12 @@ def test(
 
                 detected = []
                 for *pred_bbox, conf, obj_conf, obj_pred in detections:
-                    print("*pred_bbox")
-                    print(*pred_bbox)
-                    print("conf:")
-                    print(conf)
-                    print("obj_conf:")
-                    print(obj_conf)
-                    print("obj_pred:")
-                    print(obj_pred)
+
                     pred_bbox = torch.FloatTensor(pred_bbox).view(1, -1)
-                    print("pred_bbox:")
-                    print(pred_bbox)
+
                     # Compute iou with target boxes
                     iou = bbox_iou(pred_bbox, target_boxes)
-                    print("iou:")
-                    print(iou)
+
                     # Extract index of largest overlap
                     best_i = np.argmax(iou)
                     # If overlap exceeds threshold and classification is correct mark as correct
@@ -138,18 +106,8 @@ def test(
                     else:
                         correct.append(0)
             
-            print("correct - pred[:,4].cpu() - pred[:,6].cpu() - tcls: ")
             detection4 = torch.from_numpy(detections[:, 4])
             detection6 = torch.from_numpy(detections[:, 6])
-            print(correct)
-            print(detections[:, 4])
-            print(detections[:, 6])
-            print(target_cls)
-            print("--types--")
-            print(type(correct))
-            print(type(detection4))
-            print(type(detection6))
-            print(type(target_cls.tolist()))
 
             tp_.append(correct)
             conf_.append(detection4.tolist())
@@ -157,52 +115,87 @@ def test(
             target_cls_.append(target_cls.tolist())
 
 ##            # Compute Average Precision (AP) per class
-#    print("tp_: conf_: pred_cls_: target_cls_:")
-#    print(tp_)
-#    print(conf_)
-#    print(pred_cls_)
-#    print(target_cls_)
-#-    p, r, ap, f1, ap_class = ap_per_class_new(tp_, conf_, pred_cls_, target_cls_)
+
     if len(tp_):
         p, r, ap, f1, ap_class = ap_per_class_new(tp_, conf_, pred_cls_, target_cls_)
         mp, mr, map, mf1 = p.mean(), r.mean(), ap.mean(), f1.mean()
-        #nt = np.bincount(stats[3].astype(np.int64), minlength=nc)  # number of targets per class
-    #else:
-    #    nt = torch.zeros(1)
 
     ## Print results
     pf = '%20s' + '%10.3g' * 5  # print format
-    #print(pf % ('all', seen, nt.sum(), mp, mr, map, mf1))
     print(pf % ('all', seen, mp, mr, map, mf1))
 
+
+    df = pd.DataFrame(columns=['Class', 'Images', 'P', 'R', 'mAP@0.5', 'F1','weights','threshold(iou-conf-nms)'])
+    weightsName  = [weights]
+    class_       = ['all']
+    image_       = [seen]
+    p_           = [mp]
+    r_           = [mr]
+    mAP_         = [map]
+    f1_          = [mf1]
+    thresholding = [str(iou_thres) + " " + str(conf_thres) + " " + str(nms_thres)]
+
+
+    df["Class"] = class_
+    df["Images"] = image_
+    df["P"] = p_
+    df["R"] = r_
+    df["mAP@0.5"] = mAP_
+    df["F1"] = f1_
+    df["weights"] = weightsName 
+    df['threshold(iou-conf-nms)'] = thresholding
+
+
+
     
+    weightsSplit = weights.split('/')
+    weightsSplit = weightsSplit[0]
+    
+    weightsSplit2 = weights.split('.')
+    weightsSplit2 = weightsSplit2[0] + '/'
+    
+    tableName_    =  'TestResults/lastTablesv2/'+ weightsSplit2 
+    
+    if not os.path.exists(tableName_):
+        os.makedirs(tableName_)
 
-
+    df.to_csv(tableName_ + str(int(100*conf_thres)) + '-table-' + weightsSplit + 'conf-' + str(conf_thres) + 'nms-' + str(nms_thres) + '.csv')
+  
 
 if __name__ == '__main__':
+   
+    parser = argparse.ArgumentParser(prog='testv4.py')
+    parser.add_argument('--batch-size', type=int, default=12, help='size of each image batch')
+    parser.add_argument('--cfg', type=str, default='cfg/urban_yolov3.cfg', help='cfg file path')
+    parser.add_argument('--data-cfg', type=str, default='cfg/subt.data', help='coco.data file path')
+    #parser.add_argument('--weights', type=str, default='weights/best.pt', help='path to weights file')
+    parser.add_argument('--iou-thres', type=float, default=0.5, help='iou threshold required to qualify as detected')
+    #parser.add_argument('--conf-thres', type=float, default=i, help='object confidence threshold')
+    #parser.add_argument('--nms-thres', type=float, default=0.3, help='iou threshold for non-maximum suppression')   
+    parser.add_argument('--save-json', action='store_true', help='save a cocoapi-compatible JSON results file')
+    parser.add_argument('--img-size', type=int, default=608, help='size of each image dimension')
+    opt = parser.parse_args()
+    print(opt, end='\n\n')
 
 
-    allR = []
-    allP = []
-    
-    conf_thres  =  [0.01] #np.arange(0.01, 1.01, 0.01) 
-    #for i in np.linspace(0.01,1,10):
-    for i in conf_thres:
-        print("LOOP IS STARTED!")
-        parser = argparse.ArgumentParser(prog='test.py')
-        parser.add_argument('--batch-size', type=int, default=1, help='size of each image batch')
-        parser.add_argument('--cfg', type=str, default='cfg/urban_yolov3.cfg', help='cfg file path')
-        parser.add_argument('--data-cfg', type=str, default='cfg/subt.data', help='coco.data file path')
-        parser.add_argument('--weights', type=str, default='weights/best.pt', help='path to weights file')
-        parser.add_argument('--iou-thres', type=float, default=0.5, help='iou threshold required to qualify as detected')
-        parser.add_argument('--conf-thres', type=float, default=i, help='object confidence threshold')
-        parser.add_argument('--nms-thres', type=float, default=0.3, help='iou threshold for non-maximum suppression')   
-        parser.add_argument('--save-json', action='store_true', help='save a cocoapi-compatible JSON results file')
-        parser.add_argument('--img-size', type=int, default=608, help='size of each image dimension')
-        opt = parser.parse_args()
-        print(opt, end='\n\n')
+    weights     =  ["weights/best.pt"]
 
-        with torch.no_grad():
-            test(opt.cfg, opt.data_cfg, opt.weights, opt.batch_size, opt.img_size, opt.iou_thres, opt.conf_thres, opt.nms_thres, opt.save_json)
-        #allR.append(mP)
-        #allP.append(mR)
+    conf_thres  =  np.arange(0.01, 1.01, 0.01) 
+ 
+    ##print(conf_thres)
+
+    nms_thres   =  [0.3]
+
+    for i in range(0,len(weights)):
+        for k in range(0,len(conf_thres)):
+            for l in range(0,len(nms_thres)):
+                with torch.no_grad():
+                    test(opt.cfg,
+                         opt.data_cfg,
+                         weights[i],
+                         opt.batch_size,
+                         opt.img_size,
+                         opt.iou_thres,
+                         conf_thres[k],
+                         nms_thres[l],
+                         opt.save_json)
